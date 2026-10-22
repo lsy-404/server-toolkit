@@ -115,12 +115,9 @@ sudo server-toolkit
 ### 保留操作（0-9）
 
 - **[0]** 退出
-- **[1]** 配置 Vault URL
-- **[2]** 配置设备 UUID
-- **[3]** 工具包自更新
-- **[4]** 更新模块
-- **[5]** 显示当前配置
-- **[6-9]** 保留待用
+- **[1-7]** 系统信息、更新与配置
+- **[8]** 注册/校验设备授权（从标准输入读取 JSON）
+- **[9]** 重新预检授权和非空 IPv4 白名单
 
 ### 模块操作（10+）
 
@@ -132,15 +129,9 @@ sudo server-toolkit
 
 ### 环境变量
 
-工具包使用 `/etc/environment` 存储配置：
+工具包将 Vault URL 和设备 Bearer 授权保存在 `/etc/server-toolkit/device.env`，目录权限为 `700`、文件权限为 `600`。其他非敏感工具设置保存在 `/etc/environment`。
 
 ```bash
-# 设备 UUID（用于 Vault API 认证）
-SYS_DEVICE_UUID="your-device-uuid-here"
-
-# Vault API URL
-SYS_VAULT_URL="https://your-vault-url.com/api/data"
-
 # 工具包安装目录
 SYS_TOOLKIT_DIR="/srv/server-toolkit"
 
@@ -150,9 +141,11 @@ SYS_TOOLKIT_REPO="https://github.com/wuyilingwei/server-toolkit"
 
 ### 配置方式
 
-1. **部署时配置**：`deploy.sh` 会交互式配置必要变量
-2. **菜单配置**：使用菜单选项 [1] 和 [2] 修改配置
-3. **手动配置**：编辑 `/etc/environment` 后重新登录
+1. 使用菜单 [8] 并通过标准输入提供含 `vault_url` 和 `device_uuid` 的 JSON，或调用 `device-config.sh --configure FILE` 读取权限为 `600` 的配置文件。
+2. 菜单 [9] 可随时重新检查授权、数据库响应和非空 IPv4/CIDR 白名单。
+3. 防火墙部署会先执行同一预检；通过后才安装拒绝规则。
+
+非交互部署可运行 `sudo bash /srv/server-toolkit/scripts/firewall-whitelist/deploy.sh --mode loose`。部署会确认 `cron` 正在运行并验证启动时及每 10 分钟的同步任务已写入，再设置防火墙规则。
 
 ## 模块开发
 
@@ -244,11 +237,11 @@ sudo server-toolkit
 
 请配置您的 Vault API 端点地址
 
-可通过 `SYS_VAULT_URL` 环境变量自定义。
+可通过受保护的设备配置文件设置 Vault URL。
 
 ### 认证方式
 
-使用 Bearer Token 认证，Token 从 `SYS_DEVICE_UUID` 环境变量读取。
+使用 Bearer Token 认证，Token 从受保护的设备配置文件读取。
 
 ### 请求示例
 
@@ -351,7 +344,7 @@ tail -f /srv/server-toolkit/cert/sync.log
 2. 🔒 建议使用 HTTPS 连接 Vault API
 3. 🔒 SSH 安全部署需要 root 权限
 4. 🔒 部署前请确保至少有一个备用管理入口
-5. 🔒 定期备份 `/etc/environment` 配置
+5. 🔒 定期备份受保护的设备配置文件
 
 ## 故障排查
 
@@ -360,7 +353,7 @@ tail -f /srv/server-toolkit/cert/sync.log
 1. 检查网络连接
 2. 验证 `SYS_DEVICE_UUID` 是否正确
 3. 检查 `SYS_VAULT_URL` 配置
-4. 使用菜单 [5] 查看当前配置
+4. 运行 `sudo /srv/server-toolkit/device-config.sh --doctor` 检查授权及白名单
 
 ### 自动更新失败
 

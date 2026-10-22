@@ -3,7 +3,10 @@
 # (Formerly: SSH Security Worker)
 # This script handles ongoing IP whitelist synchronization
 
-. /etc/environment
+if [ -r /etc/server-toolkit/device.env ]; then . /etc/server-toolkit/device.env; else
+    echo "[$(date)] 错误: 设备尚未注册。请先运行设备授权注册。"
+    exit 1
+fi
 
 # Configuration constants
 DOCKER_NETWORK_CIDR="172.16.0.0/12"

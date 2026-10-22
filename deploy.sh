@@ -1,7 +1,6 @@
 #!/bin/bash
 # Server Toolkit Deployment Script
-# This script should be run directly from remote URL
-# Usage: curl -sSL https://raw.githubusercontent.com/wuyilingwei/server-toolkit/main/deploy.sh | sudo bash
+# Run this script from a local file path; non-root users are prompted by sudo.
 
 set -e
 
@@ -43,6 +42,13 @@ get_config_value() {
     local key="$1"
     local default="$2"
     
+    if [ -r /etc/server-toolkit/device.env ]; then
+        # shellcheck disable=SC1091
+        . /etc/server-toolkit/device.env
+        local protected_value="${!key:-}"
+        if [ -n "$protected_value" ]; then echo "$protected_value"; return; fi
+    fi
+
     if [ -f /etc/environment ]; then
         local value=$(grep "^${key}=" /etc/environment | cut -d'=' -f2- | tr -d '"' | tr -d "'")
         echo "${value:-$default}"
@@ -86,8 +92,10 @@ echo ""
 
 # 检查 root 权限
 if [ "$EUID" -ne 0 ]; then 
-    log_error "此脚本需要 root 权限运行"
-    echo "请使用: curl -sSL https://raw.githubusercontent.com/wuyilingwei/server-toolkit/main/deploy.sh | sudo bash"
+    if [ -f "${BASH_SOURCE[0]}" ] && command -v sudo >/dev/null 2>&1; then
+        exec sudo bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")" "$@"
+    fi
+    log_error "请将 deploy.sh 保存到本地后使用 sudo bash /path/to/deploy.sh 运行"
     exit 1
 fi
 
@@ -192,9 +200,11 @@ log_info "复制核心文件到主目录..."
 cp "$SCRIPTS_DIR/menu.sh" "$INSTALL_DIR/"
 cp "$SCRIPTS_DIR/config.json" "$INSTALL_DIR/"
 cp "$SCRIPTS_DIR/helper.sh" "$INSTALL_DIR/"
+cp "$SCRIPTS_DIR/system/device-config.sh" "$INSTALL_DIR/"
 
 chmod +x "$INSTALL_DIR/menu.sh"
 chmod +x "$INSTALL_DIR/helper.sh"
+chmod 700 "$INSTALL_DIR/device-config.sh"
 
 # 创建 storage 目录
 log_info "创建持久化数据目录: $STORAGE_DIR"
@@ -204,6 +214,7 @@ mkdir -p "$STORAGE_DIR"
 log_info "创建系统命令: server-toolkit"
 cat > "$BIN_LINK" << EOF
 #!/bin/bash
+if [ "\$EUID" -ne 0 ]; then exec sudo bash "$INSTALL_DIR/menu.sh" "\$@"; fi
 bash "$INSTALL_DIR/menu.sh" "\$@"
 EOF
 chmod +x "$BIN_LINK"

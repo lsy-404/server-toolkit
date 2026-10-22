@@ -356,6 +356,8 @@ show_menu() {
     echo -e "${COLOR_YELLOW}[5]${COLOR_RESET} 配置设备 UUID"
     echo -e "${COLOR_YELLOW}[6]${COLOR_RESET} 脚本更新源"
     echo -e "${COLOR_YELLOW}[7]${COLOR_RESET} 脚本更新分支"
+    echo -e "${COLOR_YELLOW}[8]${COLOR_RESET} 注册设备授权 (stdin JSON)"
+    echo -e "${COLOR_YELLOW}[9]${COLOR_RESET} 预检设备授权"
     
     echo ""
     
@@ -452,8 +454,13 @@ run_menu_action() {
             return $?
             ;;
         8|9)
-            log_warning "此功能保留待用"
-            return 0
+            if [ "$choice" = "8" ]; then
+                sudo "$WORKDIR/device-config.sh" --configure
+            else
+                sudo "$WORKDIR/device-config.sh" --doctor
+            fi
+            local action_status=$?
+            return "$action_status"
             ;;
     esac
     

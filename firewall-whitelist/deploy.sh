@@ -6,6 +6,18 @@
 DOCKER_NETWORK_CIDR="172.16.0.0/12"
 HTTP_PORTS="80,443"  # Publicly accessible web service ports in strict mode
 SSH_PORT="22"        # SSH port, always restricted to whitelist
+REQUESTED_MODE=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --mode)
+            [ "$#" -ge 2 ] || { echo "用法: $0 [--mode loose|strict]"; exit 2; }
+            case "$2" in loose|strict) REQUESTED_MODE="$2" ;; *) echo "防火墙模式必须是 loose 或 strict"; exit 2 ;; esac
+            shift 2
+            ;;
+        *) echo "未知参数: $1"; echo "用法: $0 [--mode loose|strict]"; exit 2 ;;
+    esac
+done
 
 # Module identifiers (for backward compatibility)
 MODULE_ID="firewall-whitelist"
@@ -50,44 +62,31 @@ echo -e "${COLOR_BLUE}========================================${COLOR_RESET}"
 echo -e "${COLOR_BLUE}      防火墙白名单部署脚本${COLOR_RESET}"
 echo -e "${COLOR_BLUE}========================================${COLOR_RESET}"
 
-# 1. 检查环境变量配置状态
-echo -e "\n${COLOR_BLUE}步骤 1: 检查配置状态${COLOR_RESET}"
-
-UUID_CONFIGURED=false
-VAULT_CONFIGURED=false
-
-if grep -q "SYS_DEVICE_UUID" /etc/environment; then
-    UUID_CONFIGURED=true
-    echo -e "${COLOR_GREEN}✓ SYS_DEVICE_UUID 已配置${COLOR_RESET}"
-else
-    echo -e "${COLOR_RED}✗ SYS_DEVICE_UUID 未配置${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}  请使用以下命令配置 UUID:${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}  echo 'SYS_DEVICE_UUID=\"your-uuid-here\"' >> /etc/environment${COLOR_RESET}"
-fi
-
-if grep -q "SYS_VAULT_URL" /etc/environment; then
-    VAULT_CONFIGURED=true
-    echo -e "${COLOR_GREEN}✓ SYS_VAULT_URL 已配置${COLOR_RESET}"
-else
-    echo -e "${COLOR_RED}✗ SYS_VAULT_URL 未配置${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}  请使用以下命令配置 Vault URL:${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}  echo 'SYS_VAULT_URL=\"https://your-vault-url/api/data\"' >> /etc/environment${COLOR_RESET}"
-fi
-
-if [ "$UUID_CONFIGURED" = false ] || [ "$VAULT_CONFIGURED" = false ]; then
-    echo -e "\n${COLOR_RED}错误: 缺少必要配置。请完成配置后重新运行此脚本。${COLOR_RESET}"
-    exit 1
-fi
-
-echo -e "${COLOR_GREEN}✓ 所有必要配置已就绪${COLOR_RESET}"
+# Verify authorization and a non-empty valid whitelist before changing firewall rules.
+echo -e "\n${COLOR_BLUE}步骤 1: 校验设备授权与白名单${COLOR_RESET}"
+DEVICE_CONFIG="$WORKDIR/device-config.sh"
+[ -x "$DEVICE_CONFIG" ] || { echo "错误: 找不到设备预检程序"; exit 1; }
+"$DEVICE_CONFIG" --doctor || { echo "错误: 预检失败，尚未更改防火墙规则"; exit 1; }
+# shellcheck disable=SC1091
+. /etc/server-toolkit/device.env
 
 # 2. 安装依赖
 echo -e "\n${COLOR_BLUE}步骤 2: 安装依赖软件包${COLOR_RESET}"
-if ! apt update; then
-    echo -e "${COLOR_RED}错误: 软件包列表更新失败${COLOR_RESET}"
+missing_packages=()
+command -v ipset >/dev/null 2>&1 || missing_packages+=(ipset)
+command -v iptables >/dev/null 2>&1 || missing_packages+=(iptables)
+command -v crontab >/dev/null 2>&1 || missing_packages+=(cron)
+if [ "${#missing_packages[@]}" -gt 0 ]; then
+    command -v apt-get >/dev/null 2>&1 || { echo -e "${COLOR_RED}错误: 缺少依赖 ${missing_packages[*]}，且找不到 apt-get${COLOR_RESET}"; exit 1; }
+    echo -e "${COLOR_YELLOW}缺少命令: ${missing_packages[*]}；正在安装对应软件包${COLOR_RESET}"
+    apt-get update && apt-get install -y "${missing_packages[@]}" || {
+        echo -e "${COLOR_RED}错误: 无法安装防火墙依赖 ${missing_packages[*]}${COLOR_RESET}"; exit 1;
+    }
+fi
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl enable --now cron || ! systemctl is-active --quiet cron; then
+    echo -e "${COLOR_RED}错误: cron 服务无法启用并运行，尚未更改防火墙规则${COLOR_RESET}"
     exit 1
 fi
-apt install -y jq curl ipset iptables
 
 # 3. 部署 worker 脚本
 echo -e "\n${COLOR_BLUE}步骤 3: 部署同步 worker 脚本${COLOR_RESET}"
@@ -99,6 +98,23 @@ cp "$WORKDIR/scripts/$MODULE_ID/worker.sh" "$WORKER_SCRIPT"
 chmod +x "$WORKER_SCRIPT"
 
 echo -e "${COLOR_GREEN}✓ Worker 脚本已部署到: $WORKER_SCRIPT${COLOR_RESET}"
+
+# Register periodic synchronization before enabling any default-deny rule.
+echo -e "\n${COLOR_BLUE}步骤 3.4: 配置并验证定时同步${COLOR_RESET}"
+cron_remove "$LEGACY_MODULE_ID"
+cron_add "$MODULE_ID" "*/10 * * * *" "/bin/sh $WORKER_SCRIPT >> $LOG_FILE 2>&1" || {
+    echo -e "${COLOR_RED}错误: 无法创建白名单同步任务，尚未更改防火墙规则${COLOR_RESET}"; exit 1;
+}
+cron_remove "$MODULE_ID-boot"
+cron_add "$MODULE_ID-boot" "@reboot" "/bin/sh $WORKER_SCRIPT >> $LOG_FILE 2>&1" || {
+    echo -e "${COLOR_RED}错误: 无法创建启动时白名单同步任务，尚未更改防火墙规则${COLOR_RESET}"; exit 1;
+}
+crontab -l 2>/dev/null | grep -F "#server-toolkit-$MODULE_ID" >/dev/null || {
+    echo -e "${COLOR_RED}错误: 未找到已保存的白名单同步任务，尚未更改防火墙规则${COLOR_RESET}"; exit 1;
+}
+crontab -l 2>/dev/null | grep -F "#server-toolkit-$MODULE_ID-boot" >/dev/null || {
+    echo -e "${COLOR_RED}错误: 未找到已保存的启动时同步任务，尚未更改防火墙规则${COLOR_RESET}"; exit 1;
+}
 
 # 3.5. 选择防火墙模式
 echo -e "\n${COLOR_BLUE}步骤 3.5: 选择防火墙模式${COLOR_RESET}"
@@ -114,13 +130,17 @@ if [ -f "$MODE_CONFIG" ]; then
     echo -e "${COLOR_YELLOW}当前模式: $CURRENT_MODE${COLOR_RESET}"
 fi
 
-mode_choice=$(input_single_char "请输入选择 (1=宽松, 2=严格)" "1")
-
-if [ "$mode_choice" = "2" ]; then
+if [ -n "$REQUESTED_MODE" ]; then
+    FIREWALL_MODE="$REQUESTED_MODE"
+elif [ "$(input_single_char "请输入选择 (1=宽松, 2=严格)" "1")" = "2" ]; then
     FIREWALL_MODE="strict"
-    echo -e "${COLOR_GREEN}✓ 已选择严格模式${COLOR_RESET}"
 else
     FIREWALL_MODE="loose"
+fi
+
+if [ "$FIREWALL_MODE" = "strict" ]; then
+    echo -e "${COLOR_GREEN}✓ 已选择严格模式${COLOR_RESET}"
+else
     echo -e "${COLOR_GREEN}✓ 已选择宽松模式${COLOR_RESET}"
 fi
 
@@ -164,13 +184,6 @@ else
     iptables -A INPUT -p tcp --dport "$SSH_PORT" -j DROP -m comment --comment "$IPTABLES_TAG"
     echo -e "${COLOR_GREEN}✓ 宽松模式规则已设置（仅限制 SSH）${COLOR_RESET}"
 fi
-
-# 4. 管理 Crontab
-echo -e "\n${COLOR_BLUE}步骤 4: 配置定时任务${COLOR_RESET}"
-# 清理旧的 cron 任务（如果存在）
-cron_remove "$LEGACY_MODULE_ID"
-# 添加新的 cron 任务
-cron_add "$MODULE_ID" "*/10 * * * *" "/bin/sh $WORKER_SCRIPT >> $LOG_FILE 2>&1"
 
 # 5. 立即执行首次同步
 echo -e "\n${COLOR_BLUE}步骤 5: 执行首次同步${COLOR_RESET}"

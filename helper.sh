@@ -38,6 +38,13 @@ check_dependencies() {
 get_config_value() {
     local key="$1"
     local default="$2"
+
+    local device_config_file="${SYS_TOOLKIT_DEVICE_CONFIG:-/etc/server-toolkit/device.env}"
+    if [ -r "$device_config_file" ]; then
+        # shellcheck disable=SC1091
+        . "$device_config_file"
+        if [ -n "${!key:-}" ]; then echo "${!key}"; return; fi
+    fi
     
     if [ -f /etc/environment ]; then
         local value=$(grep "^${key}=" /etc/environment | cut -d'=' -f2- | tr -d '"' | tr -d "'")
@@ -51,6 +58,23 @@ get_config_value() {
 set_config_value() {
     local key="$1"
     local value="$2"
+
+    if [ "$key" = "SYS_DEVICE_UUID" ] || [ "$key" = "SYS_VAULT_URL" ]; then
+        local config_file="${SYS_TOOLKIT_DEVICE_CONFIG:-/etc/server-toolkit/device.env}"
+        local vault_url device_uuid
+        vault_url=$(get_config_value SYS_VAULT_URL "")
+        device_uuid=$(get_config_value SYS_DEVICE_UUID "")
+        [ "$key" = "SYS_VAULT_URL" ] && vault_url="$value" || device_uuid="$value"
+        [[ "$vault_url" != *$'\n'* && "$vault_url" != *$'\r'* && "$vault_url" != *"'"* && "$vault_url" != *'"'* && "$device_uuid" =~ ^[A-Za-z0-9._~+/-]*=?$ ]] || {
+            echo "设备配置格式无效" >&2; return 1;
+        }
+        install -d -m 700 "$(dirname "$config_file")"
+        local tmp; tmp=$(mktemp "${config_file}.XXXXXX")
+        printf "SYS_VAULT_URL='%s'\nSYS_DEVICE_UUID='%s'\n" "$vault_url" "$device_uuid" >"$tmp"
+        chmod 600 "$tmp" && mv -f "$tmp" "$config_file"
+        export "$key=$value"
+        return 0
+    fi
     
     if [ ! -f /etc/environment ]; then
         touch /etc/environment

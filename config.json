@@ -3,7 +3,8 @@
   "track_files": [
     "deploy.sh",
     "helper.sh",
-    "menu.sh"
+    "menu.sh",
+    "system/device-config.sh"
   ],
   "min_config_version": "1.0.0",
   "modules": [
@@ -116,6 +117,7 @@
     "5": "配置设备 UUID",
     "6": "脚本更新源",
     "7": "脚本更新分支",
-    "8-9": "保留项"
+    "8": "注册/预检设备授权",
+    "9": "预检设备授权"
   }
 }
