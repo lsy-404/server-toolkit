@@ -215,7 +215,9 @@ echo -e "${COLOR_GREEN}========================================${COLOR_RESET}"
 
 # 6. 交互式卸载 Fail2ban
 echo -e "\n${COLOR_BLUE}可选操作: 清理旧策略${COLOR_RESET}"
-if dpkg -l | grep -q fail2ban; then
+if [ -n "$REQUESTED_MODE" ]; then
+    echo -e "${COLOR_YELLOW}非交互部署，保留 Fail2ban${COLOR_RESET}"
+elif dpkg -l | grep -q fail2ban; then
     confirm=$(input_single_char "检测到 Fail2ban 已安装，是否需要卸载以清理旧策略? (y/n)" "n")
     if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
         apt purge fail2ban -y && apt autoremove -y
