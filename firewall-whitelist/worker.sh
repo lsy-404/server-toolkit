@@ -62,10 +62,16 @@ cleanup_drop() {
 }
 
 # 1. Get response
-RESPONSE=$(curl -s -m 10 -X POST "$VAULT_URL" \
+umask 077
+CURL_CONFIG=$(mktemp)
+trap 'rm -f "$CURL_CONFIG"' 0
+trap 'exit 1' HUP INT TERM
+printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" >"$CURL_CONFIG"
+chmod 600 "$CURL_CONFIG"
+RESPONSE=$(curl -s -m 10 --config "$CURL_CONFIG" -X POST "$VAULT_URL" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $TOKEN" \
     -d "{\"ops\": [{\"id\": \"get_wl\", \"type\": \"read\", \"module\": \"ip\", \"key\": \"whitelist\"}]}")
+rm -f "$CURL_CONFIG"
 
 # 2. Parse IP list (compatible with spaces and commas)
 IPS=$(echo "$RESPONSE" | jq -r ".[0].data.content" 2>/dev/null | tr " ," "\n" | tr -d "\r\"" | grep -E "^[0-9./]+")
