@@ -10,3 +10,5 @@
 
 - root复核两个实现提交及diff-check，无任务号/模型署名关键词。运行时令牌已移出curl argv；保留私钥显示与API失败fallback。
 - 普通管理用户仍通过sudo提权，不更改任何SSH账户/密钥，不强制root登录。
+- [x] 自更新 Git 与直连下载路径同步核心 device-config.sh，并恢复 700 权限。
+- [x] 使用本地 Git remote 与 curl mock 在隔离目录分别运行两条真实自更新分支，确认核心文件内容和权限更新。

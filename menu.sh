@@ -80,9 +80,11 @@ do_self_update() {
                     cp "$scripts_dir/menu.sh" "$install_dir/" 2>/dev/null
                     cp "$scripts_dir/config.json" "$install_dir/" 2>/dev/null  
                     cp "$scripts_dir/helper.sh" "$install_dir/" 2>/dev/null
+                    cp "$scripts_dir/system/device-config.sh" "$install_dir/" 2>/dev/null
                     
                     chmod +x "$install_dir/menu.sh" 2>/dev/null
                     chmod +x "$install_dir/helper.sh" 2>/dev/null
+                    chmod 700 "$install_dir/device-config.sh" 2>/dev/null
                     
                     updated=true
                 fi
@@ -109,14 +111,17 @@ do_self_update() {
                 
                 if curl -s -o "$temp_dir/menu.sh" "$RAW_REPO_URL/menu.sh" 2>/dev/null && \
                    curl -s -o "$temp_dir/config.json" "$RAW_REPO_URL/config.json" 2>/dev/null && \
-                   curl -s -o "$temp_dir/helper.sh" "$RAW_REPO_URL/helper.sh" 2>/dev/null; then
+                   curl -s -o "$temp_dir/helper.sh" "$RAW_REPO_URL/helper.sh" 2>/dev/null && \
+                   curl -s -o "$temp_dir/device-config.sh" "$RAW_REPO_URL/system/device-config.sh" 2>/dev/null; then
                     
                     cp "$temp_dir/menu.sh" "$install_dir/" 2>/dev/null
                     cp "$temp_dir/config.json" "$install_dir/" 2>/dev/null
                     cp "$temp_dir/helper.sh" "$install_dir/" 2>/dev/null
+                    cp "$temp_dir/device-config.sh" "$install_dir/" 2>/dev/null
                     
                     chmod +x "$install_dir/menu.sh" 2>/dev/null
                     chmod +x "$install_dir/helper.sh" 2>/dev/null
+                    chmod 700 "$install_dir/device-config.sh" 2>/dev/null
                     
                     rm -rf "$temp_dir" 2>/dev/null
                     updated=true

@@ -8,3 +8,4 @@
 - 已核实真实Vault Worker与KV/D1绑定、生产域名；D1 ip/whitelist存在，13条合法IPv4/CIDR。三台独立设备只获/ip/whitelist:r，实测跨模块403、无效token401，三台当前SSH来源均被覆盖。凭据未进入源码或审计。
 - 三台均尚未安装toolkit，ubuntu sudo管理可用、现有密码认证禁用；Tokyo02 runner活跃，其余两台无运行runner。只计划loose模式，保留现有其他端口/服务。
 - main保护状态经GitHub API确认false；主检出干净，允许快进合并和push。
+- core device-config.sh 在初次安装后会位于安装根目录；自更新若不覆盖，会使 doctor 保持旧版。现两条更新路径同时纳入复制/下载和 chmod 700。
