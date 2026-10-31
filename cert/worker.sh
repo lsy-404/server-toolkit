@@ -31,6 +31,77 @@ CF_DOMAINS=$(echo "$CONFIG" | jq -r '.cf_origin[]' 2>/dev/null)
 # Read symlink configuration
 CREATE_ETC_SSL=$(echo "$CONFIG" | jq -r '.symlinks.etc_ssl // false' 2>/dev/null)
 CREATE_NGINX_SSL=$(echo "$CONFIG" | jq -r '.symlinks.nginx_ssl // false' 2>/dev/null)
+SYNC_FAILED=0
+
+request_vault() {
+    local payload="$1"
+    local response_with_status curl_status
+
+    response_with_status=$(curl -s -m 30 -X POST "$VAULT_URL" \
+        -A "server-toolkit" \
+        -w $'\n%{http_code}' \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -d "$payload")
+    curl_status=$?
+
+    if [ "$curl_status" -ne 0 ]; then
+        VAULT_ERROR="网络请求失败 (curl $curl_status)"
+        return 1
+    fi
+
+    HTTP_STATUS=${response_with_status##*$'\n'}
+    RESPONSE=${response_with_status%$'\n'*}
+
+    if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
+        VAULT_ERROR="HTTP $HTTP_STATUS"
+        return 1
+    fi
+
+    if ! echo "$RESPONSE" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        VAULT_ERROR="响应格式无效"
+        return 1
+    fi
+
+    return 0
+}
+
+validate_certificate_batch() {
+    local response="$1"
+    shift
+    local expected_ids=("$@")
+    local actual_count id status content
+
+    actual_count=$(echo "$response" | jq -r 'length') || return 1
+    if [ "$actual_count" -ne "${#expected_ids[@]}" ]; then
+        echo "操作数量不匹配"
+        return 1
+    fi
+
+    for id in "${expected_ids[@]}"; do
+        status=$(echo "$response" | jq -r --arg id "$id" \
+            '[.[] | select(.id == $id)] | if length == 1 then .[0].status // empty else empty end') || {
+            echo "$id 操作状态无效"
+            return 1
+        }
+        if [ "$status" != "200" ]; then
+            echo "$id 操作失败 (状态 ${status:-缺失})"
+            return 1
+        fi
+
+        content=$(echo "$response" | jq -r --arg id "$id" \
+            '[.[] | select(.id == $id)] | if length == 1 and (.[0].data.content | type) == "string" then .[0].data.content else empty end') || {
+            echo "$id 内容无效"
+            return 1
+        }
+        if [ -z "$content" ]; then
+            echo "$id 内容缺失"
+            return 1
+        fi
+    done
+
+    return 0
+}
 
 # Function to extract certificate value from JSON response
 get_cert_value() {
@@ -57,16 +128,18 @@ if [ -n "$PROD_DOMAINS" ]; then
                 {id: "privkey", type: "read", module: "certs", key: ($d + "-privkey")}
             ]}')
         
-        RESPONSE=$(curl -s -m 30 -X POST "$VAULT_URL" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $TOKEN" \
-            -d "$PAYLOAD")
-        
-        if [ -z "$RESPONSE" ]; then
-            log "错误: 空响应 - $domain"
+        if ! request_vault "$PAYLOAD"; then
+            log "错误: Vault 请求失败 ($VAULT_ERROR) - $domain"
+            SYNC_FAILED=1
             continue
         fi
-        
+
+        if ! BATCH_ERROR=$(validate_certificate_batch "$RESPONSE" cert fullchain privkey); then
+            log "错误: Vault 证书批次不完整 - $domain ($BATCH_ERROR)"
+            SYNC_FAILED=1
+            continue
+        fi
+
         # Extract and save certificates with original naming
         CERT=$(get_cert_value "$RESPONSE" "cert")
         FULLCHAIN=$(get_cert_value "$RESPONSE" "fullchain")
@@ -105,16 +178,18 @@ if [ -n "$CF_DOMAINS" ]; then
                 {id: "cf-privkey", type: "read", module: "certs", key: ($d + "-cf-privkey")}
             ]}')
         
-        RESPONSE=$(curl -s -m 30 -X POST "$VAULT_URL" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $TOKEN" \
-            -d "$PAYLOAD")
-        
-        if [ -z "$RESPONSE" ]; then
-            log "错误: 空响应 - $domain"
+        if ! request_vault "$PAYLOAD"; then
+            log "错误: Vault 请求失败 ($VAULT_ERROR) - $domain"
+            SYNC_FAILED=1
             continue
         fi
-        
+
+        if ! BATCH_ERROR=$(validate_certificate_batch "$RESPONSE" cf-cert cf-privkey); then
+            log "错误: Vault 源站证书批次不完整 - $domain ($BATCH_ERROR)"
+            SYNC_FAILED=1
+            continue
+        fi
+
         # Extract and save CF certificates with original naming
         CF_CERT=$(get_cert_value "$RESPONSE" "cf-cert")
         CF_PRIVKEY=$(get_cert_value "$RESPONSE" "cf-privkey")
@@ -131,6 +206,11 @@ if [ -n "$CF_DOMAINS" ]; then
         
         log "完成: $domain (源站证书)"
     done
+fi
+
+if [ "$SYNC_FAILED" -ne 0 ]; then
+    log "证书同步失败；跳过符号链接维护和自定义重载"
+    exit 1
 fi
 
 log "证书同步完成"
